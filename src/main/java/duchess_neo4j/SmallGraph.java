@@ -1,14 +1,16 @@
 package duchess_neo4j;
 
+
 import org.neo4j.cypher.javacompat.ExecutionEngine;
 import org.neo4j.cypher.javacompat.ExecutionResult;
 import org.neo4j.graphdb.*;
+import org.neo4j.graphdb.factory.GraphDatabaseFactory;
 import org.neo4j.graphdb.index.Index;
 import org.neo4j.graphdb.index.IndexHits;
 import org.neo4j.graphdb.traversal.Evaluators;
 import org.neo4j.graphdb.traversal.TraversalDescription;
 import org.neo4j.graphdb.traversal.Traverser;
-import org.neo4j.kernel.EmbeddedGraphDatabase;
+import org.neo4j.kernel.GraphDatabaseAPI;
 import org.neo4j.kernel.Traversal;
 import org.neo4j.kernel.impl.util.FileUtils;
 import org.neo4j.server.WrappingNeoServerBootstrapper;
@@ -16,90 +18,99 @@ import org.neo4j.server.WrappingNeoServerBootstrapper;
 import java.io.File;
 import java.io.IOException;
 
-/**
- * Created with IntelliJ IDEA.
- * User: luer01
- * Date: 3/17/13
- * Time: 7:26 PM
- * To change this template use File | Settings | File Templates.
- */
+
 public class SmallGraph {
 
-    private static final String  DB_PATH = "duchess_neo4j";
-    EmbeddedGraphDatabase graphdb;
+    private static final String DB_PATH = "neo4j_demo/data"; //where you want your data to be stored
 
-    Index <Node> filmIndex;
+    public static final String ACTRESS_PROPERTY = "name";
+    public static final String FILM_PROPERTY = "title";
+
+    GraphDatabaseAPI graphdb;
+
+    Index<Node> filmIndex;
 
     public static void main(String[] args) {
 
         SmallGraph demo = new SmallGraph();
 
-        demo.clearDb();
-        demo.createDb();
+        demo.clearDB();
+        demo.createDB();
         demo.createSomeNodes();
-        demo.createMoreNodes();
-
-        //demo.queryWithCypher("Out of Africa");
+        demo.createMoreWithIndexLookUp();
+       // demo.startAsServer();
+        demo.useCypherToFindActressForFilm("Out of Africa");
         demo.queryWithTraversal();
-
-      //  demo.runAsServer();
-
-        demo.shutdown();
+        demo.shutdownDB();  //   Don't shut down if you run as server :)
 
     }
+    private void createDB() {
 
-    private void queryWithTraversal() {
 
-        TraversalDescription td = Traversal.description()
-                .depthFirst()
-                .evaluator(Evaluators.excludeStartPosition())
-                .relationships(RelType.ACTS_IN, Direction.OUTGOING);
+        graphdb = (GraphDatabaseAPI) new GraphDatabaseFactory().newEmbeddedDatabase(DB_PATH);
+        registerShutdownHook(graphdb);
+        System.out.println("Started the database");
 
-        Traverser result = td.traverse(graphdb.getNodeById(1));
-
-        for (Path path : result){
-            System.out.println(path + "\n");
-        }
-
-        for (Node node : result.nodes()){
-            System.out.println(node.getProperty("title"));
-        }
+        filmIndex = graphdb.index().forNodes("films");
 
 
 
     }
 
-    private void queryWithCypher(String title) {
 
-        ExecutionEngine engine = new ExecutionEngine(graphdb);
-        ExecutionResult result = engine.execute("START me=node:films(title='"+title+"') MATCH me<-[:ACTS_IN]-actor RETURN actor.name");
-        System.out.println(result.dumpToString());
+    private void createSomeNodes() {
 
-    }
-
-
-
-    private void createMoreNodes() {
-
-        String name = "Iman";
+        String actress = "Meryl Streep";
+        String [] films = {"The Iron Lady", "Mamma Mia", "Out of Africa"};
 
         Transaction tx = graphdb.beginTx();
 
         try {
-            Node newActorNode = graphdb.createNode();
-            newActorNode.setProperty("name", name);
+            Node actressNode = graphdb.createNode();
+            actressNode.setProperty(ACTRESS_PROPERTY,actress);
+            System.out.println("Created actress node: "+ actressNode.getId());
 
-            IndexHits<Node> result = filmIndex.get("title", "Out of Africa");
+            for (String film : films){
+                Node filmNode = graphdb.createNode();
+                filmNode.setProperty(FILM_PROPERTY,film);
 
-            if (result.size() <1 || result.size()>1){
+                filmIndex.add(filmNode, FILM_PROPERTY,filmNode.getProperty("title"));
 
-                System.out.println("Smth is wrong. there should be one and only result here");
+                System.out.println("Created film node: "+ filmNode.getId());
 
-            }   else {
+                actressNode.createRelationshipTo(filmNode, RelType.ACTS_IN);
+                System.out.println(actressNode.getId()+ "->" + filmNode.getId());
+            }
 
-                for (Node oldFilmNode : result){
-                    newActorNode.createRelationshipTo(oldFilmNode,RelType.ACTS_IN);
-                }
+
+
+            tx.success();
+
+        } finally {
+            tx.finish();
+        }
+
+
+    }
+
+    private void createMoreWithIndexLookUp() {
+
+        String newActress = "Iman";
+
+        Transaction tx = graphdb.beginTx();
+
+        try {
+            Node newActressNode = graphdb.createNode();
+            newActressNode.setProperty(ACTRESS_PROPERTY, newActress);
+
+            IndexHits<Node> result =  filmIndex.get(FILM_PROPERTY, "Out of Africa");
+
+            if (result.size()!=1){
+                System.out.println("Something is wrong! should be just 1");
+            } else {
+
+                Node oldFilmNode = result.next();
+                newActressNode.createRelationshipTo(oldFilmNode, RelType.ACTS_IN);
 
             }
 
@@ -111,7 +122,49 @@ public class SmallGraph {
 
     }
 
-    private void clearDb()
+    private void queryWithTraversal() {
+
+        TraversalDescription td = Traversal.description()
+                .evaluator(Evaluators.excludeStartPosition());
+
+        Traverser result = td.traverse(graphdb.getNodeById(1));
+        for (Path p : result){
+            System.out.println(p);
+        }
+
+        System.out.println();
+
+        TraversalDescription td2 = Traversal.description()
+                .depthFirst()
+                .relationships(RelType.ACTS_IN, Direction.OUTGOING)
+                .evaluator(Evaluators.excludeStartPosition());
+
+        Traverser result2 = td2.traverse(graphdb.getNodeById(1));
+        for (Node node : result2.nodes()){
+            System.out.println(node.getProperty(FILM_PROPERTY));
+        }
+    }
+
+    private void useCypherToFindActressForFilm(String title) {
+
+        ExecutionEngine engine = new ExecutionEngine(graphdb);
+        ExecutionResult result = engine.execute("START film=node:films(title='" + title + "') MATCH film<-[:ACTS_IN]-actor RETURN actor.name");
+        System.out.println(result.dumpToString());
+
+    }
+
+    private void startAsServer() {
+
+        WrappingNeoServerBootstrapper srv = new WrappingNeoServerBootstrapper(graphdb);
+        srv.start();
+
+
+    }
+
+
+
+
+    private void clearDB()
     {
         try
         {
@@ -123,67 +176,6 @@ public class SmallGraph {
         }
     }
 
-    private void runAsServer() {
-
-        WrappingNeoServerBootstrapper srv = new WrappingNeoServerBootstrapper(graphdb);
-        srv.start();
-    }
-
-
-    private void createSomeNodes() {
-
-    String [] films = {"The Iron Lady", "Mamma Mia", "Out of Africa"};
-
-     Transaction tx = graphdb.beginTx();
-     Node actorNode;
-
-        try {
-
-                actorNode = graphdb.createNode();
-                actorNode.setProperty("name", "Meryl Streep");
-
-                System.out.println("Created an actor node: " + actorNode.toString());
-
-
-
-            for (String film : films){
-
-                Node filmNode = graphdb.createNode();
-                filmNode.setProperty("title", film);
-                filmIndex.add(filmNode,"title",film);
-
-                System.out.println("Created a film node: " + filmNode.toString());
-
-                actorNode.createRelationshipTo(filmNode,RelType.ACTS_IN);
-
-
-            }
-
-            tx.success();
-
-        } finally {
-
-            tx.finish();
-
-        }
-
-
-    }
-
-    private void shutdown() {
-
-        graphdb.shutdown();
-    }
-
-    private void createDb() {
-
-        graphdb = new EmbeddedGraphDatabase(DB_PATH);
-
-        filmIndex = graphdb.index().forNodes( "films" );
-
-        registerShutdownHook(graphdb);
-
-    }
 
     private void registerShutdownHook(final GraphDatabaseService graphdb) {
 
@@ -198,5 +190,16 @@ public class SmallGraph {
         });
 
     }
+
+
+
+
+    private void shutdownDB() {
+
+        System.out.println("Shutting down the database ...");
+        graphdb.shutdown();
+
+    }
+
 
 }
