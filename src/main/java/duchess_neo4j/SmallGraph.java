@@ -38,7 +38,7 @@ public class SmallGraph {
         demo.createDB();
         demo.createSomeNodes();
         demo.createMoreWithIndexLookUp();
-       // demo.startAsServer();
+       // demo.startAsServer();           //use this if you want webserver and webadmin. Do not shutdown db if you use it.
         demo.useCypherToFindActressForFilm("Out of Africa");
         demo.queryWithTraversal();
         demo.shutdownDB();  //   Don't shut down if you run as server :)
